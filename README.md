@@ -12,6 +12,7 @@ API REST para gestionar eventos, sesiones de usuario e inscripciones en futuras 
 - Express
 - MongoDB / Mongoose
 - dotenv
+- bcrypt
 - Modulos ESM con import/export
 
 ## Instalacion
@@ -52,6 +53,7 @@ src/
 ├── app.js
 ├── server.js
 ├── config/
+│   ├── database.config.js
 │   └── env.config.js
 ├── routes/
 │   ├── events.router.js
@@ -62,13 +64,17 @@ src/
 │   ├── health.controller.js
 │   └── sessions.controller.js
 ├── services/
+│   └── sessions.service.js
 ├── repositories/
+│   └── users.repository.js
 ├── dao/
+│   └── users.dao.js
 ├── models/
 │   ├── Event.js
 │   └── User.js
 ├── middlewares/
 └── utils/
+    └── hash.js
 ```
 
 ## Rutas disponibles
@@ -111,3 +117,50 @@ Respuesta inicial:
   "payload": []
 }
 ```
+
+`POST /api/sessions/register`
+
+Campos esperados:
+
+```json
+{
+  "first_name": "Ana",
+  "last_name": "Perez",
+  "email": "Ana@Mail.com ",
+  "password": "Secreta123"
+}
+```
+
+Respuesta exitosa:
+
+```json
+{
+  "status": "success",
+  "payload": {
+    "id": "665f2a...",
+    "first_name": "Ana",
+    "last_name": "Perez",
+    "email": "ana@mail.com",
+    "role": "user"
+  }
+}
+```
+
+El endpoint valida campos obligatorios, formato de email, longitud minima de password, normaliza el email y rechaza emails ya registrados. La password se guarda hasheada con bcrypt y no se devuelve en la respuesta.
+
+Ejemplo para probar:
+
+```bash
+curl -X POST http://localhost:8080/api/sessions/register \
+  -H "Content-Type: application/json" \
+  -d "{\"first_name\":\"Ana\",\"last_name\":\"Perez\",\"email\":\"Ana@Mail.com \",\"password\":\"Secreta123\"}"
+```
+
+Casos recomendados antes de entregar:
+
+- Registro exitoso.
+- Campos faltantes.
+- Email con formato invalido.
+- Email ya registrado.
+- Verificar en MongoDB que la password no esta en texto plano.
+- Verificar que la respuesta no devuelve password.
