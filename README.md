@@ -103,6 +103,16 @@ Las estrategias estan centralizadas en `src/config/passport.config.js`.
 
 `app.js` solo inicializa Passport con `passport.initialize()`. Las estrategias quedan aisladas para poder agregar providers externos como Google o GitHub sin modificar `app.js`.
 
+## Reglas de negocio de eventos
+
+- `organizer` se asigna automaticamente desde `req.user`; no se acepta desde el body.
+- No se permite crear eventos con fecha pasada.
+- `capacity` debe ser mayor a 0.
+- `price` no puede ser negativo.
+- No se modifican eventos cancelados.
+- Cancelar un evento significa cambiar `status` a `cancelled`; no se elimina fisicamente.
+- Las validaciones viven en la capa `services`.
+
 ## Roles y permisos
 
 Roles disponibles:
@@ -131,9 +141,11 @@ Autenticacion y autorizacion:
 | Metodo | Ruta | Descripcion |
 | --- | --- | --- |
 | GET | `/api/health` | Verifica que el servidor este activo |
-| GET | `/api/events` | Devuelve la lista inicial de eventos |
+| GET | `/api/events` | Lista eventos con filtros, paginacion y ordenamiento |
+| GET | `/api/events/:id` | Consulta un evento por ID |
 | POST | `/api/events` | Crea evento, solo `organizer` o `admin` |
-| PUT | `/api/events/:eid` | Modifica evento, `organizer` solo propio y `admin` cualquiera |
+| PUT | `/api/events/:id` | Modifica evento, `organizer` solo propio y `admin` cualquiera |
+| PATCH | `/api/events/:id/status` | Cambia estado del evento, sin eliminarlo fisicamente |
 | GET | `/api/sessions` | Ruta base inicial de sessions |
 | POST | `/api/sessions/register` | Registra un usuario nuevo |
 | POST | `/api/sessions/login` | Inicia sesion y guarda el JWT en cookie HTTP Only |
@@ -156,12 +168,68 @@ Response 200:
 
 Esta ruta usa la capa `events.service -> events.repository -> events.dao -> Event`.
 
+Filtros disponibles:
+
+- `status`
+- `category`
+- `location`
+- `dateFrom`
+- `dateTo`
+- `page`
+- `limit`
+- `sort`, por ejemplo `date`, `-date`, `price`, `-price`
+
+Ejemplo:
+
+```text
+GET /api/events?status=published&category=workshop&page=2&limit=5&sort=date
+```
+
 Response 200:
 
 ```json
 {
   "status": "success",
-  "payload": []
+  "payload": {
+    "data": [],
+    "page": 2,
+    "limit": 5,
+    "total": 0,
+    "totalPages": 0
+  }
+}
+```
+
+### GET /api/events/:id
+
+Ruta publica.
+
+Response 200:
+
+```json
+{
+  "status": "success",
+  "payload": {
+    "id": "6690...",
+    "title": "Congreso Tech 2026",
+    "description": "Evento sobre tecnologia y desarrollo",
+    "category": "workshop",
+    "date": "2026-11-15T00:00:00.000Z",
+    "location": "Buenos Aires",
+    "capacity": 200,
+    "price": 15000,
+    "status": "draft",
+    "organizer": "665f2a..."
+  }
+}
+```
+
+Response 404:
+
+```json
+{
+  "status": "error",
+  "message": "Evento no encontrado"
 }
 ```
 
@@ -175,9 +243,11 @@ Request:
 {
   "title": "Congreso Tech 2026",
   "description": "Evento sobre tecnologia y desarrollo",
+  "category": "workshop",
   "date": "2026-11-15",
   "location": "Buenos Aires",
-  "capacity": 200
+  "capacity": 200,
+  "price": 15000
 }
 ```
 
@@ -190,9 +260,12 @@ Response 201:
     "id": "6690...",
     "title": "Congreso Tech 2026",
     "description": "Evento sobre tecnologia y desarrollo",
+    "category": "workshop",
     "date": "2026-11-15T00:00:00.000Z",
     "location": "Buenos Aires",
     "capacity": 200,
+    "price": 15000,
+    "status": "draft",
     "organizer": "665f2a..."
   }
 }
@@ -216,7 +289,7 @@ Response 403:
 }
 ```
 
-### PUT /api/events/:eid
+### PUT /api/events/:id
 
 Requiere cookie `currentUser` y rol `organizer` o `admin`. Un `organizer` solo puede modificar eventos donde sea el organizador. Un `admin` puede modificar cualquier evento.
 
@@ -227,6 +300,8 @@ Request:
   "title": "Congreso Tech 2026 actualizado"
 }
 ```
+
+No se puede modificar un evento con `status: "cancelled"`.
 
 Response 200:
 
@@ -240,6 +315,37 @@ Response 200:
   }
 }
 ```
+
+### PATCH /api/events/:id/status
+
+Requiere cookie `currentUser` y rol `organizer` o `admin`. Cambia el estado sin eliminar el evento.
+
+Request:
+
+```json
+{
+  "status": "cancelled"
+}
+```
+
+Response 200:
+
+```json
+{
+  "status": "success",
+  "payload": {
+    "id": "6690...",
+    "status": "cancelled",
+    "organizer": "665f2a..."
+  }
+}
+```
+
+Reglas:
+
+- Estados validos: `draft`, `published`, `cancelled`, `finished`.
+- No se puede cambiar el estado de un evento ya cancelado.
+- No se puede publicar un evento finalizado.
 
 ### GET /api/sessions
 
@@ -426,6 +532,15 @@ Casos recomendados antes de entregar:
 - Registro exitoso, login, current, logout y current con 401.
 - POST `/api/events` con rol `user` devuelve 403.
 - POST `/api/events` con rol `organizer` devuelve 201.
+- POST `/api/events` con fecha pasada devuelve error de validacion.
+- POST `/api/events` con `capacity: 0` devuelve error de validacion.
+- GET `/api/events?status=published&category=workshop&page=2&limit=5` devuelve respuesta paginada.
+- GET `/api/events/:id` inexistente devuelve 404.
+- PUT `/api/events/:id` permite al organizer modificar evento propio.
+- PUT `/api/events/:id` rechaza organizer modificando evento ajeno.
+- PUT `/api/events/:id` permite admin modificando evento ajeno.
+- PATCH `/api/events/:id/status` permite cancelar sin borrar fisicamente.
+- PATCH `/api/events/:id/status` sobre evento cancelado devuelve error.
 - GET `/api/users` con rol `organizer` devuelve 403.
 - GET `/api/users` con rol `admin` devuelve 200.
 - Ruta privada sin cookie devuelve 401.
