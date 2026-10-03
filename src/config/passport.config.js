@@ -1,5 +1,5 @@
 import passport from 'passport';
-import { usersRepository } from '../repositories/users.repository.js';
+import { usersService } from '../services/users.service.js';
 import { createHash, isValidPassword } from '../utils/hash.js';
 import { verifyToken } from '../utils/jwt.js';
 
@@ -77,7 +77,7 @@ const registerStrategy = new RequestStrategy('register', async (req) => {
     throw createError('La contrasena debe tener al menos 8 caracteres', 400);
   }
 
-  const existingUser = await usersRepository.findByEmail(normalizedEmail);
+  const existingUser = await usersService.findByEmail(normalizedEmail);
 
   if (existingUser) {
     throw createError('El email ya está registrado', 409);
@@ -86,7 +86,7 @@ const registerStrategy = new RequestStrategy('register', async (req) => {
   const hashedPassword = await createHash(password);
 
   try {
-    const user = await usersRepository.create({
+    const user = await usersService.create({
       first_name: normalizedFirstName,
       last_name: normalizedLastName,
       email: normalizedEmail,
@@ -111,7 +111,7 @@ const loginStrategy = new RequestStrategy('login', async (req) => {
   }
 
   const normalizedEmail = email.trim().toLowerCase();
-  const user = await usersRepository.findByEmail(normalizedEmail);
+  const user = await usersService.findByEmail(normalizedEmail);
 
   if (!user) {
     throw createError('Credenciales inválidas', 401);

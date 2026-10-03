@@ -69,15 +69,20 @@ src/
 │   ├── health.controller.js
 │   └── sessions.controller.js
 ├── services/
+│   ├── events.service.js
+│   └── users.service.js
 ├── repositories/
+│   ├── events.repository.js
 │   └── users.repository.js
 ├── dao/
+│   ├── events.dao.js
 │   └── users.dao.js
 ├── models/
 │   ├── Event.js
 │   └── User.js
 ├── middlewares/
-│   └── auth.middleware.js
+│   ├── auth.middleware.js
+│   └── error.middleware.js
 └── utils/
     ├── hash.js
     └── jwt.js
@@ -119,6 +124,8 @@ Response 200:
 ```
 
 ### GET /api/events
+
+Esta ruta usa la capa `events.service -> events.repository -> events.dao -> Event`.
 
 Response 200:
 
