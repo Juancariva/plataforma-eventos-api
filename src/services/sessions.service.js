@@ -1,5 +1,6 @@
 import { usersRepository } from '../repositories/users.repository.js';
-import { createHash } from '../utils/hash.js';
+import { createHash, isValidPassword } from '../utils/hash.js';
+import { generateToken } from '../utils/jwt.js';
 
 const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const MIN_PASSWORD_LENGTH = 8;
@@ -72,4 +73,31 @@ export const registerUser = async (userData = {}) => {
   }
 
   return userResponse(user);
+};
+
+export const loginUser = async (credentials = {}) => {
+  const { email, password } = credentials;
+
+  if (isEmptyString(email) || isEmptyString(password)) {
+    throw createError('Credenciales inválidas', 401);
+  }
+
+  const normalizedEmail = email.trim().toLowerCase();
+  const user = await usersRepository.findByEmail(normalizedEmail);
+
+  if (!user) {
+    throw createError('Credenciales inválidas', 401);
+  }
+
+  const validPassword = await isValidPassword(password, user.password);
+
+  if (!validPassword) {
+    throw createError('Credenciales inválidas', 401);
+  }
+
+  return generateToken({
+    id: user._id.toString(),
+    email: user.email,
+    role: user.role
+  });
 };
