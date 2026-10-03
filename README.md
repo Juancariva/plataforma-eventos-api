@@ -15,6 +15,7 @@ API REST para gestionar eventos, sesiones de usuario e inscripciones en futuras 
 - bcrypt
 - jsonwebtoken
 - cookie-parser
+- Passport.js
 - Modulos ESM con import/export
 
 ## Instalacion
@@ -57,7 +58,8 @@ src/
 ├── server.js
 ├── config/
 │   ├── database.config.js
-│   └── env.config.js
+│   ├── env.config.js
+│   └── passport.config.js
 ├── routes/
 │   ├── events.router.js
 │   ├── health.router.js
@@ -67,7 +69,6 @@ src/
 │   ├── health.controller.js
 │   └── sessions.controller.js
 ├── services/
-│   └── sessions.service.js
 ├── repositories/
 │   └── users.repository.js
 ├── dao/
@@ -81,6 +82,18 @@ src/
     ├── hash.js
     └── jwt.js
 ```
+
+## Estrategias Passport
+
+Las estrategias estan centralizadas en `src/config/passport.config.js`.
+
+| Estrategia | Uso | Responsabilidad |
+| --- | --- | --- |
+| `register` | `POST /api/sessions/register` | Valida campos, normaliza email, rechaza duplicados, hashea password y crea el usuario |
+| `login` | `POST /api/sessions/login` | Valida credenciales con bcrypt y deja el usuario autenticado en `req.user` |
+| `current` | `GET /api/sessions/current` | Lee la cookie `currentUser`, verifica el JWT y deja `{ id, email, role }` en `req.user` |
+
+`app.js` solo inicializa Passport con `passport.initialize()`. Las estrategias quedan aisladas para poder agregar providers externos como Google o GitHub sin modificar `app.js`.
 
 ## Rutas disponibles
 

@@ -1,5 +1,5 @@
 import { env } from '../config/env.config.js';
-import { loginUser, registerUser } from '../services/sessions.service.js';
+import { generateToken } from '../utils/jwt.js';
 
 const cookieOptions = {
   httpOnly: true,
@@ -22,24 +22,19 @@ export const getSessions = (req, res) => {
 };
 
 export const register = async (req, res) => {
-  try {
-    const user = await registerUser(req.body);
-
-    res.status(201).json({
-      status: 'success',
-      payload: user
-    });
-  } catch (error) {
-    res.status(error.statusCode || 500).json({
-      status: 'error',
-      message: error.message || 'Error interno del servidor'
-    });
-  }
+  res.status(201).json({
+    status: 'success',
+    payload: req.user
+  });
 };
 
 export const login = async (req, res) => {
   try {
-    const token = await loginUser(req.body);
+    const token = generateToken({
+      id: req.user.id,
+      email: req.user.email,
+      role: req.user.role
+    });
 
     res
       .cookie('currentUser', token, cookieOptions)

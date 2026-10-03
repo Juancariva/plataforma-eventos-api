@@ -1,6 +1,7 @@
+import passport from 'passport';
 import { usersRepository } from '../repositories/users.repository.js';
 import { createHash, isValidPassword } from '../utils/hash.js';
-import { generateToken } from '../utils/jwt.js';
+import { verifyToken } from '../utils/jwt.js';
 
 const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const MIN_PASSWORD_LENGTH = 8;
@@ -23,8 +24,37 @@ const userResponse = (user) => ({
   role: user.role
 });
 
-export const registerUser = async (userData = {}) => {
-  const { first_name, last_name, email, password } = userData;
+class RequestStrategy {
+  constructor(name, verify) {
+    this.name = name;
+    this.verify = verify;
+  }
+
+  async authenticate(req) {
+    try {
+      const user = await this.verify(req);
+      this.success(user);
+    } catch (error) {
+      if (error.statusCode && error.statusCode < 500) {
+        this.fail({
+          message: error.message,
+          statusCode: error.statusCode
+        }, error.statusCode);
+        return;
+      }
+
+      this.error(error);
+    }
+  }
+}
+
+const registerStrategy = new RequestStrategy('register', async (req) => {
+  const {
+    first_name,
+    last_name,
+    email,
+    password
+  } = req.body || {};
 
   if (
     isEmptyString(first_name)
@@ -55,15 +85,15 @@ export const registerUser = async (userData = {}) => {
 
   const hashedPassword = await createHash(password);
 
-  let user;
-
   try {
-    user = await usersRepository.create({
+    const user = await usersRepository.create({
       first_name: normalizedFirstName,
       last_name: normalizedLastName,
       email: normalizedEmail,
       password: hashedPassword
     });
+
+    return userResponse(user);
   } catch (error) {
     if (error.code === 11000) {
       throw createError('El email ya está registrado', 409);
@@ -71,12 +101,10 @@ export const registerUser = async (userData = {}) => {
 
     throw error;
   }
+});
 
-  return userResponse(user);
-};
-
-export const loginUser = async (credentials = {}) => {
-  const { email, password } = credentials;
+const loginStrategy = new RequestStrategy('login', async (req) => {
+  const { email, password } = req.body || {};
 
   if (isEmptyString(email) || isEmptyString(password)) {
     throw createError('Credenciales inválidas', 401);
@@ -95,9 +123,35 @@ export const loginUser = async (credentials = {}) => {
     throw createError('Credenciales inválidas', 401);
   }
 
-  return generateToken({
+  return {
     id: user._id.toString(),
     email: user.email,
     role: user.role
-  });
+  };
+});
+
+const currentStrategy = new RequestStrategy('current', async (req) => {
+  const token = req.cookies.currentUser;
+
+  if (!token) {
+    throw createError('No autenticado', 401);
+  }
+
+  try {
+    const payload = verifyToken(token);
+
+    return {
+      id: payload.id,
+      email: payload.email,
+      role: payload.role
+    };
+  } catch (error) {
+    throw createError('No autenticado', 401);
+  }
+});
+
+export const initializePassport = () => {
+  passport.use('register', registerStrategy);
+  passport.use('login', loginStrategy);
+  passport.use('current', currentStrategy);
 };
