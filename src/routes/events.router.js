@@ -8,6 +8,7 @@ import {
 } from '../controllers/events.controller.js';
 import { authenticateStrategy } from '../middlewares/auth.middleware.js';
 import { authorizeRoles } from '../middlewares/authorize.middleware.js';
+import { createTicket, getEventTickets } from '../controllers/tickets.controller.js';
 
 const router = Router();
 
@@ -30,6 +31,14 @@ router.patch(
   authenticateStrategy('current'),
   authorizeRoles('organizer', 'admin'),
   updateEventStatus
+);
+
+router.post('/:eid/tickets', authenticateStrategy('current'), createTicket);
+router.get(
+  '/:eid/tickets',
+  authenticateStrategy('current'),
+  authorizeRoles('organizer', 'admin'),
+  getEventTickets
 );
 
 export default router;
