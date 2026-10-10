@@ -12,8 +12,3 @@ export const generateToken = (payload) => (
     expiresIn: env.jwtExpiresIn
   })
 );
-
-export const verifyToken = (token) => {
-  ensureJwtSecret();
-  return jwt.verify(token, env.jwtSecret);
-};

@@ -15,7 +15,7 @@ API REST para gestionar eventos, sesiones de usuario, tickets e inscripciones co
 - bcrypt
 - jsonwebtoken
 - cookie-parser
-- Passport.js
+- Passport.js con passport-local y passport-jwt
 - Nodemailer
 - Modulos ESM con import/export
 
@@ -75,6 +75,8 @@ npm start
 
 ## Estructura de carpetas
 
+Los tests de integracion estan en `tests/auth.integration.test.js`.
+
 ```text
 src/
 ├── app.js
@@ -126,6 +128,8 @@ src/
 
 Las estrategias estan centralizadas en `src/config/passport.config.js`.
 
+`register` y `login` utilizan `LocalStrategy` de `passport-local`, con `email` como campo de usuario y acceso al body mediante `passReqToCallback`. `current` utiliza `JwtStrategy` de `passport-jwt`, con un extractor de la cookie `currentUser` y verificacion mediante `JWT_SECRET`, incluida la expiracion del token.
+
 | Estrategia | Uso                           | Responsabilidad                                                                         |
 | ---------- | ----------------------------- | --------------------------------------------------------------------------------------- |
 | `register` | `POST /api/sessions/register` | Valida campos, normaliza email, rechaza duplicados, hashea password y crea el usuario   |
@@ -133,6 +137,20 @@ Las estrategias estan centralizadas en `src/config/passport.config.js`.
 | `current`  | `GET /api/sessions/current`   | Lee la cookie `currentUser`, verifica el JWT y deja `{ id, email, role }` en `req.user` |
 
 `app.js` solo inicializa Passport con `passport.initialize()`. Las estrategias quedan aisladas para poder agregar providers externos como Google o GitHub sin modificar `app.js`.
+
+El controller de login sigue generando el JWT y seteando la cookie HTTP Only. Logout elimina la cookie sin pasar por Passport. Las rutas, los formatos de respuesta y los errores `400`, `409`, `401` y `403` no cambian.
+
+## Tests de integracion
+
+Requieren Node.js 22 o superior y una conexion disponible a MongoDB:
+
+```bash
+npm test
+```
+
+Los tests usan la conexion `MONGO_URL` configurada en `.env`, pero fuerzan una base temporal unica `test_auth_<identificador>`, que se elimina al finalizar. No utilizan la base del proyecto, no modifican `.env` y no envian emails. Opcionalmente, `TEST_MONGO_URL` permite usar otra conexion exclusiva para pruebas. El usuario de MongoDB necesita permisos para crear y eliminar esa base temporal.
+
+Se verifican registro y normalizacion, hash bcrypt, bloqueo de roles desde el body, duplicados, login, cookie HTTP Only, ausencia de password en respuestas y JWT, current con tokens validos o invalidos, logout y la diferencia entre `401` y `403` en rutas protegidas.
 
 ## Reglas de negocio de eventos
 

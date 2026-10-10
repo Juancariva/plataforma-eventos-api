@@ -1,7 +1,12 @@
 import passport from 'passport';
 
 export const authenticateStrategy = (strategy) => (req, res, next) => {
-  passport.authenticate(strategy, { session: false }, (error, user, info) => {
+  passport.authenticate(strategy, {
+    session: false,
+    badRequestMessage: strategy === 'register'
+      ? 'Faltan campos obligatorios'
+      : 'Credenciales inválidas'
+  }, (error, user, info, status) => {
     if (error) {
       return res.status(error.statusCode || 500).json({
         status: 'error',
@@ -10,9 +15,11 @@ export const authenticateStrategy = (strategy) => (req, res, next) => {
     }
 
     if (!user) {
-      return res.status(info?.statusCode || 401).json({
+      const statusCode = info?.statusCode || (strategy === 'register' ? status || 400 : 401);
+
+      return res.status(statusCode).json({
         status: 'error',
-        message: info?.message || 'No autenticado'
+        message: strategy === 'current' ? 'No autenticado' : info?.message || 'No autenticado'
       });
     }
 
