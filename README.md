@@ -32,7 +32,7 @@ Crear un archivo `.env` a partir de `.env.example`.
 ```env
 PORT=8080
 NODE_ENV=development
-MONGO_URL=mongodb://127.0.0.1:27017/plataforma_eventos?replicaSet=eventos-rs
+MONGO_URL=mongodb://127.0.0.1:27017/plataforma_eventos
 JWT_SECRET=secret_de_desarrollo
 JWT_EXPIRES_IN=1h
 MAIL_HOST=
@@ -43,8 +43,6 @@ MAIL_FROM=
 ```
 
 Para recibir confirmaciones, completar las variables `MAIL_*` en el `.env` local con los datos del proveedor SMTP. Nunca subir ese archivo ni sus credenciales.
-
-El control de cupos utiliza transacciones: MongoDB debe ser un replica set, no un servidor standalone. Para desarrollo local se puede usar un replica set de un solo nodo llamado `eventos-rs`; MongoDB Atlas tambien es compatible. `MONGO_URL` debe apuntar a ese despliegue. Si MongoDB no admite transacciones, la inscripcion o cancelacion devuelve `503` sin modificar tickets ni cupos.
 
 | Variable    | Uso                                                      |
 | ----------- | -------------------------------------------------------- |
@@ -113,10 +111,6 @@ src/
 │   ├── events.dao.js
 │   ├── tickets.dao.js
 │   └── users.dao.js
-├── dto/
-│   ├── EventDTO.js
-│   ├── TicketDTO.js
-│   └── UserDTO.js
 ├── models/
 │   ├── Event.js
 │   ├── Ticket.js
@@ -127,57 +121,8 @@ src/
 │   └── error.middleware.js
 └── utils/
     ├── hash.js
-    ├── jwt.js
-    ├── objectId.js
-    └── transaction.js
+    └── jwt.js
 ```
-
-## Arquitectura en capas
-
-La API conserva las mismas rutas, cuerpos de peticion y respuestas. El refactor separa el acceso a datos, las reglas de negocio y la transformacion de respuestas:
-
-```text
-Peticion: ruta -> controller -> service -> repository -> DAO -> modelo
-Respuesta: DAO -> repository -> DTO -> service -> controller -> cliente
-```
-
-| Capa | Responsabilidad |
-| --- | --- |
-| Routes y middlewares | Definen endpoints y aplican autenticacion y autorizacion por roles |
-| Controllers | Extraen body, params o query, coordinan el flujo y responden con el codigo HTTP correspondiente |
-| Services | Validan registro, credenciales, estados, fechas, duplicados, cupos y propiedad de recursos; coordinan transacciones y notificaciones |
-| Repositories | Llaman al DAO de su entidad, ofrecen operaciones del dominio y transforman las respuestas mediante DTO |
-| DAO | Ejecutan consultas, creaciones, actualizaciones, conteos y agregaciones con Mongoose; no deciden que datos enviar al cliente |
-| DTO | Crean objetos nuevos con una lista explicita de campos publicos, sin modificar el documento original |
-| Models | Definen esquemas, referencias, validaciones e indices |
-
-`users.dao.js`, `events.dao.js` y `tickets.dao.js` son los unicos archivos de la aplicacion que importan modelos. Los services consumen repositories y los controllers no acceden a Mongoose. Las estrategias Passport delegan registro y validacion de credenciales en `usersService`; el controller de login conserva la generacion del JWT y la cookie HTTP Only.
-
-Los repositories de eventos y tickets distinguen las lecturas internas necesarias para validar cupos, estados y propietarios de las operaciones que devuelven DTO para una respuesta. En usuarios, `findCredentialsByEmail` entrega el hash solamente al service para compararlo con bcrypt: nunca lo incorpora al DTO del usuario.
-
-DTO implementados:
-
-- `UserDTO.toPublicResponse`: `id`, `first_name`, `last_name`, `email` y `role`, para registro y listado administrativo.
-- `UserDTO.toAuthenticatedResponse`: solamente `id`, `email` y `role`, para autenticacion, JWT y `/current`.
-- `EventDTO.toPublicResponse`: los campos publicos del evento; `organizer` sigue siendo un ID y `reservedSeats` permanece interno.
-- `TicketDTO.toPublicResponse`: los campos publicos del ticket; `user` se reduce a su ID incluso si esta poblado. Si `event` viene de `populate`, `EventDTO.toTicketResponse` conserva solo `id`, `title`, `date` y `location`.
-
-Ningun DTO incluye `password`, ni siquiera hasheada. El filtrado de documentos relacionados se realiza en el DTO, no borrando propiedades del documento ni dependiendo de la seleccion de campos del DAO.
-
-### Manejo de errores
-
-Los controllers y los errores internos de autenticacion delegan en `error.middleware.js`. Las validaciones conservan el formato `{ "status": "error", "message": "..." }` y sus codigos HTTP:
-
-| Codigo | Uso |
-| --- | --- |
-| `400` | Datos o condiciones de negocio invalidos |
-| `401` | Sin sesion valida o credenciales invalidas |
-| `403` | Usuario autenticado sin permisos |
-| `404` | Recurso o ruta inexistente |
-| `409` | Conflicto, como email o inscripcion activa duplicados |
-| `500` | Error interno inesperado |
-
-Se conserva ademas `503` para problemas de disponibilidad del control transaccional de cupos.
 
 ## Estrategias Passport
 
@@ -187,13 +132,11 @@ Las estrategias estan centralizadas en `src/config/passport.config.js`.
 
 | Estrategia | Uso                           | Responsabilidad                                                                         |
 | ---------- | ----------------------------- | --------------------------------------------------------------------------------------- |
-| `register` | `POST /api/sessions/register` | Delega validacion, normalizacion, unicidad, hash y creacion en `usersService.register` |
-| `login`    | `POST /api/sessions/login`    | Delega credenciales en `usersService.authenticate` y deja el DTO autenticado en `req.user` |
+| `register` | `POST /api/sessions/register` | Valida campos, normaliza email, rechaza duplicados, hashea password y crea el usuario   |
+| `login`    | `POST /api/sessions/login`    | Valida credenciales con bcrypt y deja el usuario autenticado en `req.user`              |
 | `current`  | `GET /api/sessions/current`   | Lee la cookie `currentUser`, verifica el JWT y deja `{ id, email, role }` en `req.user` |
 
 `app.js` solo inicializa Passport con `passport.initialize()`. Las estrategias quedan aisladas para poder agregar providers externos como Google o GitHub sin modificar `app.js`.
-
-El controller de login sigue generando el JWT y seteando la cookie HTTP Only. Logout elimina la cookie sin pasar por Passport. Las rutas, los formatos de respuesta y los errores `400`, `409`, `401` y `403` no cambian.
 
 ## Tests de integracion
 
@@ -212,7 +155,6 @@ Se verifican registro y normalizacion, hash bcrypt, bloqueo de roles desde el bo
 - `organizer` se asigna automaticamente desde `req.user`; no se acepta desde el body.
 - No se permite crear eventos con fecha pasada.
 - `capacity` debe ser mayor a 0.
-- No se puede reducir `capacity` por debajo de los lugares reservados por tickets activos.
 - `price` no puede ser negativo.
 - No se modifican eventos cancelados.
 - Cancelar un evento significa cambiar `status` a `cancelled`; no se elimina fisicamente.
@@ -620,7 +562,7 @@ Response 403:
 
 ## Tickets e inscripciones
 
-El flujo respeta `ruta -> controller -> service -> repository -> DAO -> Ticket`. El repository aplica `TicketDTO` antes de devolver una respuesta al service.
+El flujo respeta `ruta -> controller -> service -> repository -> DAO -> Ticket`.
 
 El modelo guarda referencias ObjectId a `User` y `Event`, ademas de `status`, `quantity`, `reservationCode`, `createdAt` y `cancelledAt`. No guarda objetos de usuarios o eventos embebidos.
 
@@ -638,15 +580,10 @@ Reglas de inscripcion:
 - El evento debe existir, estar `published` y tener fecha futura.
 - `quantity` es obligatorio y debe ser un numero entero mayor a 0; no se aceptan strings como `"2"`.
 - Cada usuario puede tener un solo ticket activo (`confirmed` o `pending`) por evento. Puede volver a inscribirse despues de cancelar.
-- Los lugares ocupados corresponden a la suma de `quantity` de los tickets activos. No se cuenta la cantidad de documentos ni los tickets cancelados.
+- Los lugares ocupados se calculan sumando `quantity` de los tickets activos. No se cuenta la cantidad de documentos ni los tickets cancelados.
 - Cupos disponibles = `event.capacity` menos lugares ocupados.
 - Un indice unico parcial refuerza la regla de una inscripcion activa por usuario y evento.
-- El campo interno `Event.reservedSeats` mantiene los lugares ocupados. No se acepta desde el body ni se expone en las respuestas.
-- La reserva usa un update atomico condicional: incrementa `reservedSeats` solo si el evento sigue publicado, su fecha es futura y la cantidad solicitada cabe en `capacity`.
-- La reserva y la creacion del ticket se confirman juntas en una transaccion. Si falla una, se revierten ambas. Las cancelaciones y los cambios de capacidad tambien protegen el contador mediante transacciones.
-- La consistencia depende de MongoDB, no de una cola en memoria, y funciona con multiples instancias de la API.
-
-Los eventos creados antes de incorporar el contador lo inicializan automaticamente desde sus tickets activos dentro de la misma transaccion, al reservar, cancelar o modificar su capacidad. Al actualizar el proyecto, detener las instancias de la version anterior: todas las instancias deben usar este control. No modificar tickets ni el contador directamente en MongoDB, porque esos cambios omiten las reglas de consistencia.
+- Las altas se procesan en orden por evento para evitar que dos peticiones reserven el mismo cupo. Esta version se ejecuta en una unica instancia de Node.js.
 
 ### POST /api/events/:eid/tickets
 
@@ -678,7 +615,7 @@ Response 201:
 }
 ```
 
-Luego de confirmar la transaccion del ticket y sus cupos, Nodemailer envia al email del usuario un correo con el evento, su fecha y ubicacion, la cantidad de lugares y el codigo de reserva. Si el correo falla, el ticket sigue confirmado y la API devuelve `201`: la notificacion es posterior a la inscripcion. El servidor registra un aviso sin mostrar credenciales.
+Luego de guardar el ticket, Nodemailer envia al email del usuario un correo con el evento, su fecha y ubicacion, la cantidad de lugares y el codigo de reserva. Si el correo falla, el ticket sigue confirmado y la API devuelve `201`: la notificacion es posterior a la inscripcion. El servidor registra un aviso sin mostrar credenciales.
 
 Errores: `401` sin sesion, `404` si el evento no existe, `400` por cantidad invalida, estado/fecha no disponibles o falta de cupos, y `409` por inscripcion activa duplicada.
 
@@ -711,4 +648,4 @@ Requiere cookie `currentUser`. No necesita body.
 
 El propietario del ticket o un `admin` puede cancelarlo. La respuesta `200` devuelve el ticket con `status: "cancelled"` y `cancelledAt` con la fecha de cancelacion.
 
-No se elimina el documento. La transaccion cambia el estado y descuenta `quantity` de `reservedSeats`, liberando esos lugares. Dos cancelaciones simultaneas no pueden liberar el mismo cupo dos veces. Si falla la liberacion, la cancelacion tambien se revierte. Ticket inexistente: `404`; ticket ajeno: `403`; ticket ya cancelado: `400`.
+No se elimina el documento. El cupo queda disponible porque el ticket deja de formar parte de la suma de reservas activas. Ticket inexistente: `404`; ticket ajeno: `403`; ticket ya cancelado: `400`.

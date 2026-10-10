@@ -1,10 +1,10 @@
-import { eventsRepository } from '../repositories/events.repository.js';
-import { ticketsRepository } from '../repositories/tickets.repository.js';
-import { withDatabaseTransaction } from '../utils/transaction.js';
-import { isValidObjectId } from '../utils/objectId.js';
+import mongoose from "mongoose";
+import { eventsRepository } from "../repositories/events.repository.js";
+import { ticketsRepository } from "../repositories/tickets.repository.js";
+import { withDatabaseTransaction } from "../utils/transaction.js";
 
-const VALID_STATUSES = ['draft', 'published', 'cancelled', 'finished'];
-const ALLOWED_SORT_FIELDS = ['date', 'price', 'capacity', 'title'];
+const VALID_STATUSES = ["draft", "published", "cancelled", "finished"];
+const ALLOWED_SORT_FIELDS = ["date", "price", "capacity", "title"];
 
 const createError = (message, statusCode) => {
   const error = new Error(message);
@@ -12,65 +12,70 @@ const createError = (message, statusCode) => {
   return error;
 };
 
-const isEmptyString = (value) => (
-  typeof value !== 'string' || value.trim().length === 0
-);
+const isEmptyString = (value) =>
+  typeof value !== "string" || value.trim().length === 0;
 
 const toNumber = (value) => Number(value);
 
 const isPastDate = (date) => new Date(date).getTime() < Date.now();
 
+const eventResponse = (event) => ({
+  id: event._id.toString(),
+  title: event.title,
+  description: event.description,
+  category: event.category,
+  date: event.date,
+  location: event.location,
+  capacity: event.capacity,
+  price: event.price,
+  status: event.status,
+  organizer: event.organizer.toString(),
+});
+
 const ensureValidObjectId = (id) => {
-  if (!isValidObjectId(id)) {
-    throw createError('Evento no encontrado', 404);
+  if (!mongoose.Types.ObjectId.isValid(id)) {
+    throw createError("Evento no encontrado", 404);
   }
 };
 
 const validateRequiredEventFields = (eventData) => {
-  const {
-    title,
-    description,
-    category,
-    date,
-    location,
-    capacity,
-    price
-  } = eventData;
+  const { title, description, category, date, location, capacity, price } =
+    eventData;
 
   if (
-    isEmptyString(title)
-    || isEmptyString(description)
-    || isEmptyString(category)
-    || isEmptyString(date)
-    || isEmptyString(location)
-    || capacity === undefined
-    || price === undefined
+    isEmptyString(title) ||
+    isEmptyString(description) ||
+    isEmptyString(category) ||
+    isEmptyString(date) ||
+    isEmptyString(location) ||
+    capacity === undefined ||
+    price === undefined
   ) {
-    throw createError('Faltan campos obligatorios', 400);
+    throw createError("Faltan campos obligatorios", 400);
   }
 };
 
 const validateCapacityAndPrice = ({ capacity, price }) => {
   if (capacity !== undefined && toNumber(capacity) <= 0) {
-    throw createError('La capacidad debe ser mayor a 0', 400);
+    throw createError("La capacidad debe ser mayor a 0", 400);
   }
 
   if (price !== undefined && toNumber(price) < 0) {
-    throw createError('El precio no puede ser negativo', 400);
+    throw createError("El precio no puede ser negativo", 400);
   }
 };
 
 const ensureCanManageEvent = (event, user) => {
   const isOwner = event.organizer.toString() === user.id;
 
-  if (user.role === 'organizer' && !isOwner) {
-    throw createError('No tenés permisos para realizar esta acción', 403);
+  if (user.role === "organizer" && !isOwner) {
+    throw createError("No tenés permisos para realizar esta acción", 403);
   }
 };
 
 const ensureEventCanBeModified = (event) => {
-  if (event.status === 'cancelled') {
-    throw createError('Los eventos cancelados no pueden modificarse', 400);
+  if (event.status === "cancelled") {
+    throw createError("Los eventos cancelados no pueden modificarse", 400);
   }
 };
 
@@ -82,7 +87,7 @@ const normalizeEventPayload = (eventData, includeStatus = false) => {
     date: eventData.date,
     location: eventData.location.trim(),
     capacity: toNumber(eventData.capacity),
-    price: toNumber(eventData.price)
+    price: toNumber(eventData.price),
   };
 
   if (includeStatus && eventData.status !== undefined) {
@@ -94,13 +99,13 @@ const normalizeEventPayload = (eventData, includeStatus = false) => {
 
 const allowedEventUpdateFields = (eventData) => {
   const allowedFields = [
-    'title',
-    'description',
-    'category',
-    'date',
-    'location',
-    'capacity',
-    'price'
+    "title",
+    "description",
+    "category",
+    "date",
+    "location",
+    "capacity",
+    "price",
   ];
 
   return allowedFields.reduce((updatedFields, field) => {
@@ -108,11 +113,12 @@ const allowedEventUpdateFields = (eventData) => {
       return updatedFields;
     }
 
-    updatedFields[field] = typeof eventData[field] === 'string'
-      ? eventData[field].trim()
-      : eventData[field];
+    updatedFields[field] =
+      typeof eventData[field] === "string"
+        ? eventData[field].trim()
+        : eventData[field];
 
-    if (field === 'capacity' || field === 'price') {
+    if (field === "capacity" || field === "price") {
       updatedFields[field] = toNumber(eventData[field]);
     }
 
@@ -150,9 +156,9 @@ const buildEventFilter = (query) => {
   return filter;
 };
 
-const buildSort = (sortValue = 'date') => {
-  const direction = sortValue.startsWith('-') ? -1 : 1;
-  const field = sortValue.replace('-', '');
+const buildSort = (sortValue = "date") => {
+  const direction = sortValue.startsWith("-") ? -1 : 1;
+  const field = sortValue.replace("-", "");
 
   if (!ALLOWED_SORT_FIELDS.includes(field)) {
     return { date: 1 };
@@ -166,12 +172,19 @@ export const ensureReservedSeats = async (event, session) => {
     return event;
   }
 
-  // Existing events get their counter from active tickets in the same transaction.
-  const reserved = await ticketsRepository.getReservedQuantity(event._id, session);
-  const initializedEvent = await eventsRepository.initializeReservedSeats(event._id, reserved, session);
+  // Los eventos existentes obtienen su contador a partir de los tickets activos dentro de la misma transacción.
+  const reserved = await ticketsRepository.getReservedQuantity(
+    event._id,
+    session,
+  );
+  const initializedEvent = await eventsRepository.initializeReservedSeats(
+    event._id,
+    reserved,
+    session,
+  );
 
   if (!initializedEvent) {
-    throw createError('No se pudieron inicializar los cupos del evento', 503);
+    throw createError("No se pudieron inicializar los cupos del evento", 503);
   }
 
   return initializedEvent;
@@ -189,28 +202,28 @@ export const eventsService = {
       filter,
       sort,
       skip,
-      limit
+      limit,
     });
 
     return {
-      data: events,
+      data: events.map(eventResponse),
       page,
       limit,
       total,
-      totalPages: Math.ceil(total / limit)
+      totalPages: Math.ceil(total / limit),
     };
   },
 
   getById: async (id) => {
     ensureValidObjectId(id);
 
-    const event = await eventsRepository.getById(id);
+    const event = await eventsRepository.findById(id);
 
     if (!event) {
-      throw createError('Evento no encontrado', 404);
+      throw createError("Evento no encontrado", 404);
     }
 
-    return event;
+    return eventResponse(event);
   },
 
   create: async (eventData, user) => {
@@ -218,25 +231,28 @@ export const eventsService = {
     validateCapacityAndPrice(eventData);
 
     if (isPastDate(eventData.date)) {
-      throw createError('No se puede crear un evento con fecha pasada', 400);
+      throw createError("No se puede crear un evento con fecha pasada", 400);
     }
 
     if (eventData.status && !VALID_STATUSES.includes(eventData.status)) {
-      throw createError('Estado de evento inválido', 400);
+      throw createError("Estado de evento inválido", 400);
     }
 
     const payload = normalizeEventPayload(eventData, true);
 
-    if (payload.status === 'cancelled' || payload.status === 'finished') {
-      throw createError('No se puede crear un evento finalizado o cancelado', 400);
+    if (payload.status === "cancelled" || payload.status === "finished") {
+      throw createError(
+        "No se puede crear un evento finalizado o cancelado",
+        400,
+      );
     }
 
     const event = await eventsRepository.create({
       ...payload,
-      organizer: user.id
+      organizer: user.id,
     });
 
-    return event;
+    return eventResponse(event);
   },
 
   update: async (id, eventData, user) => {
@@ -246,7 +262,7 @@ export const eventsService = {
       const event = await eventsRepository.findById(id, session);
 
       if (!event) {
-        throw createError('Evento no encontrado', 404);
+        throw createError("Evento no encontrado", 404);
       }
 
       ensureCanManageEvent(event, user);
@@ -254,7 +270,7 @@ export const eventsService = {
       validateCapacityAndPrice(eventData);
 
       if (eventData.date && isPastDate(eventData.date)) {
-        throw createError('No se puede asignar una fecha pasada', 400);
+        throw createError("No se puede asignar una fecha pasada", 400);
       }
 
       if (eventData.capacity !== undefined) {
@@ -264,14 +280,17 @@ export const eventsService = {
       const updatedEvent = await eventsRepository.updateById(
         id,
         allowedEventUpdateFields(eventData),
-        session
+        session,
       );
 
       if (!updatedEvent) {
-        throw createError('La capacidad no puede ser menor a los lugares reservados', 400);
+        throw createError(
+          "La capacidad no puede ser menor a los lugares reservados",
+          400,
+        );
       }
 
-      return updatedEvent;
+      return eventResponse(updatedEvent);
     };
 
     return eventData.capacity !== undefined
@@ -283,27 +302,30 @@ export const eventsService = {
     ensureValidObjectId(id);
 
     if (!VALID_STATUSES.includes(status)) {
-      throw createError('Estado de evento inválido', 400);
+      throw createError("Estado de evento inválido", 400);
     }
 
     const event = await eventsRepository.findById(id);
 
     if (!event) {
-      throw createError('Evento no encontrado', 404);
+      throw createError("Evento no encontrado", 404);
     }
 
     ensureCanManageEvent(event, user);
 
-    if (event.status === 'cancelled') {
-      throw createError('No se puede cambiar el estado de un evento cancelado', 400);
+    if (event.status === "cancelled") {
+      throw createError(
+        "No se puede cambiar el estado de un evento cancelado",
+        400,
+      );
     }
 
-    if (status === 'published' && event.status === 'finished') {
-      throw createError('No se puede publicar un evento finalizado', 400);
+    if (status === "published" && event.status === "finished") {
+      throw createError("No se puede publicar un evento finalizado", 400);
     }
 
     const updatedEvent = await eventsRepository.updateById(id, { status });
 
-    return updatedEvent;
-  }
+    return eventResponse(updatedEvent);
+  },
 };
