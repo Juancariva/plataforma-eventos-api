@@ -32,7 +32,7 @@ Crear un archivo `.env` a partir de `.env.example`.
 ```env
 PORT=8080
 NODE_ENV=development
-MONGO_URL=mongodb://127.0.0.1:27017/plataforma_eventos
+MONGO_URL=mongodb://127.0.0.1:27017/plataforma_eventos?replicaSet=eventos-rs
 JWT_SECRET=secret_de_desarrollo
 JWT_EXPIRES_IN=1h
 MAIL_HOST=
@@ -43,6 +43,8 @@ MAIL_FROM=
 ```
 
 Para recibir confirmaciones, completar las variables `MAIL_*` en el `.env` local con los datos del proveedor SMTP. Nunca subir ese archivo ni sus credenciales.
+
+El control de cupos utiliza transacciones: MongoDB debe ser un replica set, no un servidor standalone. Para desarrollo local se puede usar un replica set de un solo nodo llamado `eventos-rs`; MongoDB Atlas tambien es compatible. `MONGO_URL` debe apuntar a ese despliegue. Si MongoDB no admite transacciones, la inscripcion o cancelacion devuelve `503` sin modificar tickets ni cupos.
 
 | Variable    | Uso                                                      |
 | ----------- | -------------------------------------------------------- |
@@ -121,7 +123,8 @@ src/
 │   └── error.middleware.js
 └── utils/
     ├── hash.js
-    └── jwt.js
+    ├── jwt.js
+    └── transaction.js
 ```
 
 ## Estrategias Passport
@@ -157,6 +160,7 @@ Se verifican registro y normalizacion, hash bcrypt, bloqueo de roles desde el bo
 - `organizer` se asigna automaticamente desde `req.user`; no se acepta desde el body.
 - No se permite crear eventos con fecha pasada.
 - `capacity` debe ser mayor a 0.
+- No se puede reducir `capacity` por debajo de los lugares reservados por tickets activos.
 - `price` no puede ser negativo.
 - No se modifican eventos cancelados.
 - Cancelar un evento significa cambiar `status` a `cancelled`; no se elimina fisicamente.
@@ -582,10 +586,15 @@ Reglas de inscripcion:
 - El evento debe existir, estar `published` y tener fecha futura.
 - `quantity` es obligatorio y debe ser un numero entero mayor a 0; no se aceptan strings como `"2"`.
 - Cada usuario puede tener un solo ticket activo (`confirmed` o `pending`) por evento. Puede volver a inscribirse despues de cancelar.
-- Los lugares ocupados se calculan sumando `quantity` de los tickets activos. No se cuenta la cantidad de documentos ni los tickets cancelados.
+- Los lugares ocupados corresponden a la suma de `quantity` de los tickets activos. No se cuenta la cantidad de documentos ni los tickets cancelados.
 - Cupos disponibles = `event.capacity` menos lugares ocupados.
 - Un indice unico parcial refuerza la regla de una inscripcion activa por usuario y evento.
-- Las altas se procesan en orden por evento para evitar que dos peticiones reserven el mismo cupo. Esta version se ejecuta en una unica instancia de Node.js.
+- El campo interno `Event.reservedSeats` mantiene los lugares ocupados. No se acepta desde el body ni se expone en las respuestas.
+- La reserva usa un update atomico condicional: incrementa `reservedSeats` solo si el evento sigue publicado, su fecha es futura y la cantidad solicitada cabe en `capacity`.
+- La reserva y la creacion del ticket se confirman juntas en una transaccion. Si falla una, se revierten ambas. Las cancelaciones y los cambios de capacidad tambien protegen el contador mediante transacciones.
+- La consistencia depende de MongoDB, no de una cola en memoria, y funciona con multiples instancias de la API.
+
+Los eventos creados antes de incorporar el contador lo inicializan automaticamente desde sus tickets activos dentro de la misma transaccion, al reservar, cancelar o modificar su capacidad. Al actualizar el proyecto, detener las instancias de la version anterior: todas las instancias deben usar este control. No modificar tickets ni el contador directamente en MongoDB, porque esos cambios omiten las reglas de consistencia.
 
 ### POST /api/events/:eid/tickets
 
@@ -617,7 +626,7 @@ Response 201:
 }
 ```
 
-Luego de guardar el ticket, Nodemailer envia al email del usuario un correo con el evento, su fecha y ubicacion, la cantidad de lugares y el codigo de reserva. Si el correo falla, el ticket sigue confirmado y la API devuelve `201`: la notificacion es posterior a la inscripcion. El servidor registra un aviso sin mostrar credenciales.
+Luego de confirmar la transaccion del ticket y sus cupos, Nodemailer envia al email del usuario un correo con el evento, su fecha y ubicacion, la cantidad de lugares y el codigo de reserva. Si el correo falla, el ticket sigue confirmado y la API devuelve `201`: la notificacion es posterior a la inscripcion. El servidor registra un aviso sin mostrar credenciales.
 
 Errores: `401` sin sesion, `404` si el evento no existe, `400` por cantidad invalida, estado/fecha no disponibles o falta de cupos, y `409` por inscripcion activa duplicada.
 
@@ -650,4 +659,4 @@ Requiere cookie `currentUser`. No necesita body.
 
 El propietario del ticket o un `admin` puede cancelarlo. La respuesta `200` devuelve el ticket con `status: "cancelled"` y `cancelledAt` con la fecha de cancelacion.
 
-No se elimina el documento. El cupo queda disponible porque el ticket deja de formar parte de la suma de reservas activas. Ticket inexistente: `404`; ticket ajeno: `403`; ticket ya cancelado: `400`.
+No se elimina el documento. La transaccion cambia el estado y descuenta `quantity` de `reservedSeats`, liberando esos lugares. Dos cancelaciones simultaneas no pueden liberar el mismo cupo dos veces. Si falla la liberacion, la cancelacion tambien se revierte. Ticket inexistente: `404`; ticket ajeno: `403`; ticket ya cancelado: `400`.

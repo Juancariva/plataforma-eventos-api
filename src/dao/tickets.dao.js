@@ -4,14 +4,17 @@ import Ticket from '../models/Ticket.js';
 const ACTIVE_STATUSES = ['confirmed', 'pending'];
 
 export const ticketsDao = {
-  create: async (ticketData) => Ticket.create(ticketData),
-  findById: async (id) => Ticket.findById(id).lean(),
-  findActive: async (userId, eventId) => Ticket.findOne({
+  create: async (ticketData, session) => {
+    const [ticket] = await Ticket.create([ticketData], { session });
+    return ticket;
+  },
+  findById: async (id, session) => Ticket.findById(id).session(session || null).lean(),
+  findActive: async (userId, eventId, session) => Ticket.findOne({
     user: userId,
     event: eventId,
     status: { $in: ACTIVE_STATUSES }
-  }).lean(),
-  getReservedQuantity: async (eventId) => {
+  }).session(session || null).lean(),
+  getReservedQuantity: async (eventId, session) => {
     const result = await Ticket.aggregate([
       {
         $match: {
@@ -20,7 +23,7 @@ export const ticketsDao = {
         }
       },
       { $group: { _id: '$event', total: { $sum: '$quantity' } } }
-    ]);
+    ]).session(session || null);
 
     return result[0]?.total || 0;
   },
@@ -31,9 +34,9 @@ export const ticketsDao = {
   getByEvent: async (eventId) => Ticket.find({ event: eventId })
     .sort({ createdAt: -1 })
     .lean(),
-  cancel: async (id, cancelledAt) => Ticket.findOneAndUpdate(
+  cancel: async (id, cancelledAt, session) => Ticket.findOneAndUpdate(
     { _id: id, status: { $in: ACTIVE_STATUSES } },
     { $set: { status: 'cancelled', cancelledAt } },
-    { new: true, runValidators: true }
+    { new: true, runValidators: true, session }
   ).lean()
 };

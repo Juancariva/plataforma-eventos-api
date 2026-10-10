@@ -1,5 +1,7 @@
 import mongoose from 'mongoose';
 import { eventsRepository } from '../repositories/events.repository.js';
+import { ticketsRepository } from '../repositories/tickets.repository.js';
+import { withDatabaseTransaction } from '../utils/transaction.js';
 
 const VALID_STATUSES = ['draft', 'published', 'cancelled', 'finished'];
 const ALLOWED_SORT_FIELDS = ['date', 'price', 'capacity', 'title'];
@@ -172,6 +174,22 @@ const buildSort = (sortValue = 'date') => {
   return { [field]: direction };
 };
 
+export const ensureReservedSeats = async (event, session) => {
+  if (event.reservedSeats !== undefined) {
+    return event;
+  }
+
+  // Existing events get their counter from active tickets in the same transaction.
+  const reserved = await ticketsRepository.getReservedQuantity(event._id, session);
+  const initializedEvent = await eventsRepository.initializeReservedSeats(event._id, reserved, session);
+
+  if (!initializedEvent) {
+    throw createError('No se pudieron inicializar los cupos del evento', 503);
+  }
+
+  return initializedEvent;
+};
+
 export const eventsService = {
   getAll: async (query = {}) => {
     const page = Math.max(Number(query.page) || 1, 1);
@@ -237,26 +255,41 @@ export const eventsService = {
   update: async (id, eventData, user) => {
     ensureValidObjectId(id);
 
-    const event = await eventsRepository.findById(id);
+    const updateEvent = async (session) => {
+      const event = await eventsRepository.findById(id, session);
 
-    if (!event) {
-      throw createError('Evento no encontrado', 404);
-    }
+      if (!event) {
+        throw createError('Evento no encontrado', 404);
+      }
 
-    ensureCanManageEvent(event, user);
-    ensureEventCanBeModified(event);
-    validateCapacityAndPrice(eventData);
+      ensureCanManageEvent(event, user);
+      ensureEventCanBeModified(event);
+      validateCapacityAndPrice(eventData);
 
-    if (eventData.date && isPastDate(eventData.date)) {
-      throw createError('No se puede asignar una fecha pasada', 400);
-    }
+      if (eventData.date && isPastDate(eventData.date)) {
+        throw createError('No se puede asignar una fecha pasada', 400);
+      }
 
-    const updatedEvent = await eventsRepository.updateById(
-      id,
-      allowedEventUpdateFields(eventData)
-    );
+      if (eventData.capacity !== undefined) {
+        await ensureReservedSeats(event, session);
+      }
 
-    return eventResponse(updatedEvent);
+      const updatedEvent = await eventsRepository.updateById(
+        id,
+        allowedEventUpdateFields(eventData),
+        session
+      );
+
+      if (!updatedEvent) {
+        throw createError('La capacidad no puede ser menor a los lugares reservados', 400);
+      }
+
+      return eventResponse(updatedEvent);
+    };
+
+    return eventData.capacity !== undefined
+      ? withDatabaseTransaction(updateEvent)
+      : updateEvent();
   },
 
   updateStatus: async (id, status, user) => {

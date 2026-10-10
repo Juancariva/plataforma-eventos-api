@@ -3,6 +3,8 @@ import mongoose from 'mongoose';
 import { eventsRepository } from '../repositories/events.repository.js';
 import { ticketsRepository } from '../repositories/tickets.repository.js';
 import { sendTicketConfirmationEmail } from './mail.service.js';
+import { ensureReservedSeats } from './events.service.js';
+import { withDatabaseTransaction } from '../utils/transaction.js';
 
 const createError = (message, statusCode) => {
   const error = new Error(message);
@@ -36,36 +38,24 @@ const ticketResponse = (ticket) => ({
   cancelledAt: ticket.cancelledAt
 });
 
-const eventQueues = new Map();
-
-// Serializa el calculo y la reserva de cupos por evento en esta instancia.
-const withEventQueue = async (eventId, operation) => {
-  const previous = eventQueues.get(eventId) || Promise.resolve();
-  let release;
-  const current = new Promise((resolve) => { release = resolve; });
-  eventQueues.set(eventId, current);
-
-  await previous;
-
-  try {
-    return await operation();
-  } finally {
-    release();
-
-    if (eventQueues.get(eventId) === current) {
-      eventQueues.delete(eventId);
-    }
-  }
-};
-
-const getEvent = async (eventId) => {
-  const event = await eventsRepository.findById(eventId);
+const getEvent = async (eventId, session) => {
+  const event = await eventsRepository.findById(eventId, session);
 
   if (!event) {
     throw createError('Evento no encontrado', 404);
   }
 
   return event;
+};
+
+const validateEnrollmentEvent = (event) => {
+  if (event.status !== 'published') {
+    throw createError('El evento no esta disponible para inscripciones', 400);
+  }
+
+  if (new Date(event.date).getTime() <= Date.now()) {
+    throw createError('No es posible inscribirse a un evento finalizado', 400);
+  }
 };
 
 export const ticketsService = {
@@ -77,27 +67,21 @@ export const ticketsService = {
       throw createError('quantity debe ser un numero entero mayor a 0', 400);
     }
 
-    const { ticket, event } = await withEventQueue(eventId, async () => {
-      const foundEvent = await getEvent(eventId);
+    const { ticket, event } = await withDatabaseTransaction(async (session) => {
+      const foundEvent = await getEvent(eventId, session);
+      validateEnrollmentEvent(foundEvent);
 
-      if (foundEvent.status !== 'published') {
-        throw createError('El evento no esta disponible para inscripciones', 400);
-      }
-
-      if (new Date(foundEvent.date).getTime() <= Date.now()) {
-        throw createError('No es posible inscribirse a un evento finalizado', 400);
-      }
-
-      const existingTicket = await ticketsRepository.findActive(user.id, eventId);
+      const existingTicket = await ticketsRepository.findActive(user.id, eventId, session);
 
       if (existingTicket) {
         throw createError('Ya tenes una inscripcion activa para este evento', 409);
       }
 
-      const reserved = await ticketsRepository.getReservedQuantity(eventId);
-      const available = foundEvent.capacity - reserved;
+      await ensureReservedSeats(foundEvent, session);
+      const reservedEvent = await eventsRepository.reserveSeats(eventId, quantity, session);
 
-      if (quantity > available) {
+      if (!reservedEvent) {
+        validateEnrollmentEvent(await getEvent(eventId, session));
         throw createError('No hay cupos suficientes disponibles', 400);
       }
 
@@ -108,9 +92,9 @@ export const ticketsService = {
           quantity,
           reservationCode: randomUUID(),
           status: 'confirmed'
-        });
+        }, session);
 
-        return { ticket: createdTicket, event: foundEvent };
+        return { ticket: createdTicket, event: reservedEvent };
       } catch (error) {
         if (error.code === 11000 && error.keyPattern?.user && error.keyPattern?.event) {
           throw createError('Ya tenes una inscripcion activa para este evento', 409);
@@ -145,26 +129,37 @@ export const ticketsService = {
   },
   cancel: async (id, user) => {
     const ticketId = normalizeId(id, 'Ticket no encontrado');
-    const ticket = await ticketsRepository.findById(ticketId);
 
-    if (!ticket) {
-      throw createError('Ticket no encontrado', 404);
-    }
+    return withDatabaseTransaction(async (session) => {
+      const ticket = await ticketsRepository.findById(ticketId, session);
 
-    if (user.role !== 'admin' && ticket.user.toString() !== user.id) {
-      throw createError('No tenes permisos para cancelar este ticket', 403);
-    }
+      if (!ticket) {
+        throw createError('Ticket no encontrado', 404);
+      }
 
-    if (ticket.status === 'cancelled') {
-      throw createError('El ticket ya esta cancelado', 400);
-    }
+      if (user.role !== 'admin' && ticket.user.toString() !== user.id) {
+        throw createError('No tenes permisos para cancelar este ticket', 403);
+      }
 
-    const cancelledTicket = await ticketsRepository.cancel(ticketId, new Date());
+      if (ticket.status === 'cancelled') {
+        throw createError('El ticket ya esta cancelado', 400);
+      }
 
-    if (!cancelledTicket) {
-      throw createError('El ticket ya esta cancelado', 400);
-    }
+      const event = await getEvent(ticket.event, session);
+      await ensureReservedSeats(event, session);
+      const cancelledTicket = await ticketsRepository.cancel(ticketId, new Date(), session);
 
-    return ticketResponse(cancelledTicket);
+      if (!cancelledTicket) {
+        throw createError('El ticket ya esta cancelado', 400);
+      }
+
+      const releasedEvent = await eventsRepository.releaseSeats(ticket.event, ticket.quantity, session);
+
+      if (!releasedEvent) {
+        throw createError('No se pudieron liberar los cupos del evento', 503);
+      }
+
+      return ticketResponse(cancelledTicket);
+    });
   }
 };
