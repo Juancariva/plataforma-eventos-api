@@ -1,14 +1,10 @@
 import Event from '../models/Event.js';
 
 export const eventsDao = {
-  getPaginated: async ({ filter, sort, skip, limit }) => {
-    const [events, total] = await Promise.all([
-      Event.find(filter).sort(sort).skip(skip).limit(limit).lean(),
-      Event.countDocuments(filter)
-    ]);
-
-    return { events, total };
-  },
+  findAll: async ({ filter, sort, skip, limit }) => (
+    Event.find(filter).sort(sort).skip(skip).limit(limit).lean()
+  ),
+  count: async (filter) => Event.countDocuments(filter),
   create: async (eventData) => Event.create(eventData),
   findById: async (id, session) => Event.findById(id).session(session || null).lean(),
   initializeReservedSeats: async (id, quantity, session) => Event.findOneAndUpdate(

@@ -113,6 +113,10 @@ src/
 │   ├── events.dao.js
 │   ├── tickets.dao.js
 │   └── users.dao.js
+├── dto/
+│   ├── EventDTO.js
+│   ├── TicketDTO.js
+│   └── UserDTO.js
 ├── models/
 │   ├── Event.js
 │   ├── Ticket.js
@@ -124,8 +128,56 @@ src/
 └── utils/
     ├── hash.js
     ├── jwt.js
+    ├── objectId.js
     └── transaction.js
 ```
+
+## Arquitectura en capas
+
+La API conserva las mismas rutas, cuerpos de peticion y respuestas. El refactor separa el acceso a datos, las reglas de negocio y la transformacion de respuestas:
+
+```text
+Peticion: ruta -> controller -> service -> repository -> DAO -> modelo
+Respuesta: DAO -> repository -> DTO -> service -> controller -> cliente
+```
+
+| Capa | Responsabilidad |
+| --- | --- |
+| Routes y middlewares | Definen endpoints y aplican autenticacion y autorizacion por roles |
+| Controllers | Extraen body, params o query, coordinan el flujo y responden con el codigo HTTP correspondiente |
+| Services | Validan registro, credenciales, estados, fechas, duplicados, cupos y propiedad de recursos; coordinan transacciones y notificaciones |
+| Repositories | Llaman al DAO de su entidad, ofrecen operaciones del dominio y transforman las respuestas mediante DTO |
+| DAO | Ejecutan consultas, creaciones, actualizaciones, conteos y agregaciones con Mongoose; no deciden que datos enviar al cliente |
+| DTO | Crean objetos nuevos con una lista explicita de campos publicos, sin modificar el documento original |
+| Models | Definen esquemas, referencias, validaciones e indices |
+
+`users.dao.js`, `events.dao.js` y `tickets.dao.js` son los unicos archivos de la aplicacion que importan modelos. Los services consumen repositories y los controllers no acceden a Mongoose. Las estrategias Passport delegan registro y validacion de credenciales en `usersService`; el controller de login conserva la generacion del JWT y la cookie HTTP Only.
+
+Los repositories de eventos y tickets distinguen las lecturas internas necesarias para validar cupos, estados y propietarios de las operaciones que devuelven DTO para una respuesta. En usuarios, `findCredentialsByEmail` entrega el hash solamente al service para compararlo con bcrypt: nunca lo incorpora al DTO del usuario.
+
+DTO implementados:
+
+- `UserDTO.toPublicResponse`: `id`, `first_name`, `last_name`, `email` y `role`, para registro y listado administrativo.
+- `UserDTO.toAuthenticatedResponse`: solamente `id`, `email` y `role`, para autenticacion, JWT y `/current`.
+- `EventDTO.toPublicResponse`: los campos publicos del evento; `organizer` sigue siendo un ID y `reservedSeats` permanece interno.
+- `TicketDTO.toPublicResponse`: los campos publicos del ticket; `user` se reduce a su ID incluso si esta poblado. Si `event` viene de `populate`, `EventDTO.toTicketResponse` conserva solo `id`, `title`, `date` y `location`.
+
+Ningun DTO incluye `password`, ni siquiera hasheada. El filtrado de documentos relacionados se realiza en el DTO, no borrando propiedades del documento ni dependiendo de la seleccion de campos del DAO.
+
+### Manejo de errores
+
+Los controllers y los errores internos de autenticacion delegan en `error.middleware.js`. Las validaciones conservan el formato `{ "status": "error", "message": "..." }` y sus codigos HTTP:
+
+| Codigo | Uso |
+| --- | --- |
+| `400` | Datos o condiciones de negocio invalidos |
+| `401` | Sin sesion valida o credenciales invalidas |
+| `403` | Usuario autenticado sin permisos |
+| `404` | Recurso o ruta inexistente |
+| `409` | Conflicto, como email o inscripcion activa duplicados |
+| `500` | Error interno inesperado |
+
+Se conserva ademas `503` para problemas de disponibilidad del control transaccional de cupos.
 
 ## Estrategias Passport
 
@@ -135,8 +187,8 @@ Las estrategias estan centralizadas en `src/config/passport.config.js`.
 
 | Estrategia | Uso                           | Responsabilidad                                                                         |
 | ---------- | ----------------------------- | --------------------------------------------------------------------------------------- |
-| `register` | `POST /api/sessions/register` | Valida campos, normaliza email, rechaza duplicados, hashea password y crea el usuario   |
-| `login`    | `POST /api/sessions/login`    | Valida credenciales con bcrypt y deja el usuario autenticado en `req.user`              |
+| `register` | `POST /api/sessions/register` | Delega validacion, normalizacion, unicidad, hash y creacion en `usersService.register` |
+| `login`    | `POST /api/sessions/login`    | Delega credenciales en `usersService.authenticate` y deja el DTO autenticado en `req.user` |
 | `current`  | `GET /api/sessions/current`   | Lee la cookie `currentUser`, verifica el JWT y deja `{ id, email, role }` en `req.user` |
 
 `app.js` solo inicializa Passport con `passport.initialize()`. Las estrategias quedan aisladas para poder agregar providers externos como Google o GitHub sin modificar `app.js`.
@@ -568,7 +620,7 @@ Response 403:
 
 ## Tickets e inscripciones
 
-El flujo respeta `ruta -> controller -> service -> repository -> DAO -> Ticket`.
+El flujo respeta `ruta -> controller -> service -> repository -> DAO -> Ticket`. El repository aplica `TicketDTO` antes de devolver una respuesta al service.
 
 El modelo guarda referencias ObjectId a `User` y `Event`, ademas de `status`, `quantity`, `reservationCode`, `createdAt` y `cancelledAt`. No guarda objetos de usuarios o eventos embebidos.
 

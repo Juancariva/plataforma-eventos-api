@@ -1,7 +1,7 @@
-import mongoose from 'mongoose';
 import { eventsRepository } from '../repositories/events.repository.js';
 import { ticketsRepository } from '../repositories/tickets.repository.js';
 import { withDatabaseTransaction } from '../utils/transaction.js';
+import { isValidObjectId } from '../utils/objectId.js';
 
 const VALID_STATUSES = ['draft', 'published', 'cancelled', 'finished'];
 const ALLOWED_SORT_FIELDS = ['date', 'price', 'capacity', 'title'];
@@ -20,21 +20,8 @@ const toNumber = (value) => Number(value);
 
 const isPastDate = (date) => new Date(date).getTime() < Date.now();
 
-const eventResponse = (event) => ({
-  id: event._id.toString(),
-  title: event.title,
-  description: event.description,
-  category: event.category,
-  date: event.date,
-  location: event.location,
-  capacity: event.capacity,
-  price: event.price,
-  status: event.status,
-  organizer: event.organizer.toString()
-});
-
 const ensureValidObjectId = (id) => {
-  if (!mongoose.Types.ObjectId.isValid(id)) {
+  if (!isValidObjectId(id)) {
     throw createError('Evento no encontrado', 404);
   }
 };
@@ -206,7 +193,7 @@ export const eventsService = {
     });
 
     return {
-      data: events.map(eventResponse),
+      data: events,
       page,
       limit,
       total,
@@ -217,13 +204,13 @@ export const eventsService = {
   getById: async (id) => {
     ensureValidObjectId(id);
 
-    const event = await eventsRepository.findById(id);
+    const event = await eventsRepository.getById(id);
 
     if (!event) {
       throw createError('Evento no encontrado', 404);
     }
 
-    return eventResponse(event);
+    return event;
   },
 
   create: async (eventData, user) => {
@@ -249,7 +236,7 @@ export const eventsService = {
       organizer: user.id
     });
 
-    return eventResponse(event);
+    return event;
   },
 
   update: async (id, eventData, user) => {
@@ -284,7 +271,7 @@ export const eventsService = {
         throw createError('La capacidad no puede ser menor a los lugares reservados', 400);
       }
 
-      return eventResponse(updatedEvent);
+      return updatedEvent;
     };
 
     return eventData.capacity !== undefined
@@ -317,6 +304,6 @@ export const eventsService = {
 
     const updatedEvent = await eventsRepository.updateById(id, { status });
 
-    return eventResponse(updatedEvent);
+    return updatedEvent;
   }
 };

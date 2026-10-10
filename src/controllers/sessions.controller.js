@@ -28,7 +28,7 @@ export const register = async (req, res) => {
   });
 };
 
-export const login = async (req, res) => {
+export const login = async (req, res, next) => {
   try {
     const token = generateToken({
       id: req.user.id,
@@ -44,21 +44,14 @@ export const login = async (req, res) => {
         message: 'Login correcto'
       });
   } catch (error) {
-    res.status(error.statusCode || 500).json({
-      status: 'error',
-      message: error.message || 'Error interno del servidor'
-    });
+    next(error);
   }
 };
 
 export const current = (req, res) => {
   res.status(200).json({
     status: 'success',
-    payload: {
-      id: req.user.id,
-      email: req.user.email,
-      role: req.user.role
-    }
+    payload: req.user
   });
 };
 

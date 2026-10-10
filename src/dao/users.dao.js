@@ -1,7 +1,8 @@
 import User from '../models/User.js';
 
 export const usersDao = {
-  findByEmail: async (email) => User.findOne({ email }),
+  findById: async (id) => User.findById(id).lean(),
+  findOne: async (filter) => User.findOne(filter).lean(),
   create: async (userData) => User.create(userData),
-  getAll: async () => User.find().select('-password').lean()
+  findAll: async () => User.find().lean()
 };

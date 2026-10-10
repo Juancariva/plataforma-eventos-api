@@ -1,10 +1,10 @@
 import { randomUUID } from 'node:crypto';
-import mongoose from 'mongoose';
 import { eventsRepository } from '../repositories/events.repository.js';
 import { ticketsRepository } from '../repositories/tickets.repository.js';
 import { sendTicketConfirmationEmail } from './mail.service.js';
 import { ensureReservedSeats } from './events.service.js';
 import { withDatabaseTransaction } from '../utils/transaction.js';
+import { isValidObjectId, normalizeObjectId } from '../utils/objectId.js';
 
 const createError = (message, statusCode) => {
   const error = new Error(message);
@@ -13,30 +13,12 @@ const createError = (message, statusCode) => {
 };
 
 const normalizeId = (id, message) => {
-  if (!mongoose.Types.ObjectId.isValid(id)) {
+  if (!isValidObjectId(id)) {
     throw createError(message, 404);
   }
 
-  return new mongoose.Types.ObjectId(id).toString();
+  return normalizeObjectId(id);
 };
-
-const ticketResponse = (ticket) => ({
-  id: ticket._id.toString(),
-  user: ticket.user.toString(),
-  event: ticket.event && 'title' in ticket.event
-    ? {
-      id: ticket.event._id.toString(),
-      title: ticket.event.title,
-      date: ticket.event.date,
-      location: ticket.event.location
-    }
-    : ticket.event?.toString() || null,
-  status: ticket.status,
-  quantity: ticket.quantity,
-  reservationCode: ticket.reservationCode,
-  createdAt: ticket.createdAt,
-  cancelledAt: ticket.cancelledAt
-});
 
 const getEvent = async (eventId, session) => {
   const event = await eventsRepository.findById(eventId, session);
@@ -107,14 +89,13 @@ export const ticketsService = {
     try {
       await sendTicketConfirmationEmail({ to: user.email, event, ticket });
     } catch (error) {
-      console.error(`No se pudo enviar el email del ticket ${ticket._id}. Revisar MAIL_* y el servidor SMTP.`);
+      console.error(`No se pudo enviar el email del ticket ${ticket.id}. Revisar MAIL_* y el servidor SMTP.`);
     }
 
-    return ticketResponse(ticket);
+    return ticket;
   },
   getMyTickets: async (user) => {
-    const tickets = await ticketsRepository.getByUser(user.id);
-    return tickets.map(ticketResponse);
+    return ticketsRepository.getByUser(user.id);
   },
   getEventTickets: async (id, user) => {
     const eventId = normalizeId(id, 'Evento no encontrado');
@@ -124,8 +105,7 @@ export const ticketsService = {
       throw createError('No tenes permisos para consultar los tickets de este evento', 403);
     }
 
-    const tickets = await ticketsRepository.getByEvent(eventId);
-    return tickets.map(ticketResponse);
+    return ticketsRepository.getByEvent(eventId);
   },
   cancel: async (id, user) => {
     const ticketId = normalizeId(id, 'Ticket no encontrado');
@@ -159,7 +139,7 @@ export const ticketsService = {
         throw createError('No se pudieron liberar los cupos del evento', 503);
       }
 
-      return ticketResponse(cancelledTicket);
+      return cancelledTicket;
     });
   }
 };

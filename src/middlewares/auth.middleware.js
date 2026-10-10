@@ -8,10 +8,7 @@ export const authenticateStrategy = (strategy) => (req, res, next) => {
       : 'Credenciales inválidas'
   }, (error, user, info, status) => {
     if (error) {
-      return res.status(error.statusCode || 500).json({
-        status: 'error',
-        message: error.message || 'Error interno del servidor'
-      });
+      return next(error);
     }
 
     if (!user) {
